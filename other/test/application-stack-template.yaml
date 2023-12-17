@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'hands-on1'
+#----------------------------------------------------------------
+# パラメーター
+#----------------------------------------------------------------
+Parameters:
+  # EC2インスタンスタイプ
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.nano
+    Description: Select EC2 instance type.
+
+  EnvironmentName:
+    Description: hands-on1-template
+    Type: String
+
+#----------------------------------------------------------------
+# リソース
+#----------------------------------------------------------------
+Resources:
+
+  #----------------------
+  # EC2作成
+  #----------------------
+  PublicSubnet1EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      # AMIは、AmazonLinux2
+      ImageId: "ami-0e25eba2025eea319"
+      # インスタンスタイプは、t2.micro
+      InstanceType: !Ref InstanceType
+      # 自動割当パプリックIPを有効にする場合はNetworkInterfacesを記載する必要がある
+      NetworkInterfaces:
+        - SubnetId: !ImportValue
+            'Fn::Sub': '${EnvironmentName}-PublicSubnet1Id'
+          GroupSet:
+            - !ImportValue
+              'Fn::Sub': '${EnvironmentName}-WebSecurityGroupId'
+          # 自動割当パプリックIPを有効
+          AssociatePublicIpAddress: true
+          DeviceIndex: 0
+      # ストレージを設定
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeType: "gp2"
+            VolumeSize: 8
+      # SSM経由でSSH接続出来るようにするIAMロールをアタッチする
+      IamInstanceProfile: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-SessionManagerIamInstanceProfile'
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName} Public Subnet EC2Instance"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Amazon Linux 2 に PHP、MySQL、Apache、WordPress をインストール
+          amazon-linux-extras install -y php7.4
+          yum install -y mysql httpd php-mbstring php-xml gd php-gd
+          systemctl enable httpd.service
+          systemctl start httpd.service
+          wget https://ja.wordpress.org/latest-ja.tar.gz
+          tar zxvf latest-ja.tar.gz
+          cp -r wordpress/* /var/www/html/
+          chown apache:apache -R /var/www/html/
+  # EC2にEIPをつける
+  ElasticIpForPublicSubnet1EC2Instance:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref PublicSubnet1EC2Instance
+
+  # PublicSubnet2 に新しいEC2インスタンスを作成
+  PublicSubnet2EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: "ami-0e25eba2025eea319"
+      InstanceType: !Ref InstanceType
+      NetworkInterfaces:
+        - SubnetId: !ImportValue
+            'Fn::Sub': '${EnvironmentName}-PublicSubnet2Id'
+          GroupSet:
+            - !ImportValue
+              'Fn::Sub': '${EnvironmentName}-WebSecurityGroupId'
+          AssociatePublicIpAddress: true
+          DeviceIndex: 0
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeType: "gp2"
+            VolumeSize: 8
+      IamInstanceProfile: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-SessionManagerIamInstanceProfile'
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName} Public Subnet 2 EC2Instance"
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Amazon Linux 2 に PHP、MySQL、Apache、WordPress をインストール
+          amazon-linux-extras install -y php7.4
+          yum install -y mysql httpd php-mbstring php-xml gd php-gd
+          systemctl enable httpd.service
+          systemctl start httpd.service
+          wget https://ja.wordpress.org/latest-ja.tar.gz
+          tar zxvf latest-ja.tar.gz
+          cp -r wordpress/* /var/www/html/
+          chown apache:apache -R /var/www/html/
+
+  # PublicSubnet2 の新しいEC2インスタンスにEIPを割り当てる
+  ElasticIpForPublicSubnet2EC2Instance:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref PublicSubnet2EC2Instance
+
+  #----------------------
+  # RDS作成
+  #----------------------
+  MyRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      # データベースエンジン
+      Engine: mysql
+      # マスターユーザー名
+      MasterUsername: wordpress
+      # ストレージの割り当て (GB)
+      AllocatedStorage: 20
+      # マスターパスワード（実際の環境ではセキュアな方法で提供する）
+      MasterUserPassword: "ChangeMe1234"
+      # DBインスタンスクラス
+      DBInstanceClass: db.t2.micro
+      # データベース名
+      DBName: wordpress
+      # VPCの設定（Outputsから参照）
+      DBSubnetGroupName: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-RdsSubnetGroupId'
+      # パブリックアクセス無効
+      PubliclyAccessible: false
+      # セキュリティグループ
+      VPCSecurityGroups:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-RdsSecurityGroupId'
+      # マルチAZ
+      MultiAZ: true
+
+  #----------------------
+  # ALBのリスナーとターゲットグループ作成
+  #----------------------
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /readme.html
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      VpcId: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-VPCId'
+      # ターゲットの登録
+      Targets:
+        - Id: !Ref PublicSubnet1EC2Instance
+        - Id: !Ref PublicSubnet2EC2Instance
+
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: LB1
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet1Id'
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet2Id'
+      SecurityGroups:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-LbSecurityGroupId'
+
+
+#----------------------
+# Outputs
+#----------------------

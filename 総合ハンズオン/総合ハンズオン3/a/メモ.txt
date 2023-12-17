@@ -1,0 +1,34 @@
+前回のリクエストしたapplication-stack-template.yamlに対して、下記を追加して頂きたいです。
+
+・LaunchTemplateのEC2に下記IAMポリシーをアタッチしてください。CloudWatchに送る為となります。
+ロール名:CloudWatchAgentServerPolicy
+ポリシー:CloudWatchAgentServerPolicy
+
+
+前回のリクエストしたapplication-stack-template.yamlに対して、下記を追加して頂きたいです。
+・LaunchTemplateにawslogsのインストールと設定。下記にEC2で実行したコマンドを記載いたします。
+UserData化する際の参考にしてください
+
+yum -y install awslogs
+vi /etc/awslogs/awscli.conf
+【変更前】
+[region] = us-east-1
+【変更後】
+[region] = ap-northeast-1
+
+vi /etc/awslogs/awslogs.conf
+【追記】
+[HttpAccessLog]
+file = /var/log/httpd/access_log
+log_group_name = HttpAccessLog
+log_stream_name = {instance_id}
+datetime_format = %b %d %H:%M:%S
+
+[HttpErrorLog]
+file = /var/log/httpd/error_log
+log_group_name = HttpErrorLog
+log_stream_name = {instance_id}
+datetime_format = %b %d %H:%M:%S
+
+systemctl enable awslogsd
+systemctl start awslogsd

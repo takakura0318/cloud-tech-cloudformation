@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'hands-on1'
+#----------------------------------------------------------------
+# パラメーター
+#----------------------------------------------------------------
+Parameters:
+  # EC2インスタンスタイプ
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.nano
+    Description: Select EC2 instance type.
+
+  EnvironmentName:
+    Description: hands-on1-template
+    Type: String
+
+#----------------------------------------------------------------
+# リソース
+#----------------------------------------------------------------
+Resources:
+  #----------------------
+  # RDS作成
+  #----------------------
+  MyRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      # データベースエンジン
+      Engine: mysql
+      # マスターユーザー名
+      MasterUsername: wordpress
+      # ストレージの割り当て (GB)
+      AllocatedStorage: 20
+      # マスターパスワード（実際の環境ではセキュアな方法で提供する）
+      MasterUserPassword: "ChangeMe1234"
+      # DBインスタンスクラス
+      DBInstanceClass: db.t2.micro
+      # データベース名
+      DBName: wordpress
+      # VPCの設定（Outputsから参照）
+      DBSubnetGroupName: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-RdsSubnetGroupId'
+      # パブリックアクセス無効
+      PubliclyAccessible: false
+      # セキュリティグループ
+      VPCSecurityGroups:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-RdsSecurityGroupId'
+      # マルチAZ
+      MultiAZ: false
+
+  #----------------------
+  # SSMロール クロススタック参照ができない為、このファイルでリソースを作成する
+  #----------------------
+  SsmSessionManagerIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      RoleName: 'SsmSessionManagerIamRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  SessionManagerIamInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref SsmSessionManagerIamRole
+  #----------------------
+  # 起動テンプレート作成(EC2インスタンスの設計書を作成)
+  #----------------------
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: MyLaunchTemplate
+      LaunchTemplateData:
+        # AmazonLinux2
+        ImageId: "ami-0e25eba2025eea319"
+        InstanceType: !Ref InstanceType
+        NetworkInterfaces:
+          # 自動割当パプリックIPを有効
+          - AssociatePublicIpAddress: true
+            DeviceIndex: 0
+            # セキュリティグループはこちらに指定
+            Groups:
+              - !ImportValue
+                'Fn::Sub': '${EnvironmentName}-WebSecurityGroupId'
+        # ストレージを設定
+        BlockDeviceMappings:
+          - DeviceName: "/dev/xvda"
+            Ebs:
+              VolumeType: "gp2"
+              VolumeSize: 8
+        # SSM経由でSSH接続出来るようにするIAMロールをアタッチする
+        IamInstanceProfile:
+          Arn: !GetAtt SessionManagerIamInstanceProfile.Arn
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # AWS CLIをインストール
+            yum install -y aws-cli
+            # 現在のインスタンスIDを取得
+            # INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+            # 利用可能なElastic IPを取得（ここでは例として固定のEIPを使用）
+            # ALLOCATION_ID="eipalloc-1234567890abcdef0"
+            # Elastic IPをインスタンスに割り当て
+            # aws ec2 associate-address --instance-id $INSTANCE_ID --allocation-id $ALLOCATION_ID
+            # Amazon Linux 2 に PHP、MySQL、Apache、WordPress をインストール
+            amazon-linux-extras install -y php7.4
+            yum install -y mysql httpd php-mbstring php-xml gd php-gd
+            systemctl enable httpd.service
+            systemctl start httpd.service
+            wget https://ja.wordpress.org/latest-ja.tar.gz
+            tar zxvf latest-ja.tar.gz
+            cp -r wordpress/* /var/www/html/
+            chown apache:apache -R /var/www/html/
+
+  #----------------------
+  # ALBターゲットグループ作成
+  #----------------------
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-VPCId'
+      HealthCheckPath: /readme.html
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: '80'
+      #ヘルスチェック間隔
+      HealthCheckIntervalSeconds: 10
+      #ヘルスチェックのタイムアウト時間
+      HealthCheckTimeoutSeconds: 5
+      #ヘルシーと見なすための連続成功回数
+      HealthyThresholdCount: 2
+      #アンヘルシーと見なすための連続失敗回数
+      UnhealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+
+
+  #----------------------
+  # ALBリスナー作成
+  #----------------------
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  #----------------------
+  # ALB作成
+  #----------------------
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: LB1
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet1Id'
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet2Id'
+      SecurityGroups:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-LbSecurityGroupId'
+
+  #----------------------
+  # AutoScalingGroup作成
+  #----------------------
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      #起動テンプレート
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      # AutoScalingグループにALBを紐付ける
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      # 任意な名前
+      AutoScalingGroupName: Test-AutoScaling1
+      # 希望する容量
+      DesiredCapacity: 2
+      # 最小キャパシティ
+      MinSize: 2
+      # 最大キャパシティ
+      MaxSize: 4
+      VPCZoneIdentifier:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet1Id'
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet2Id'
+      # ヘルスチェックタイプ ELBの場合はELB
+      HealthCheckType: ELB
+      # ヘルスチェック感覚
+      HealthCheckGracePeriod: 300
+
+#----------------------
+# Outputs
+#----------------------

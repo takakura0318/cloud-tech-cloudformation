@@ -1,0 +1,311 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudTech single-az-ec2-template
+
+#----------------------------------------------------------------
+# パラメーター
+# パラメーターとはプログラミングで例えると変数みたいなもの
+#----------------------------------------------------------------
+Parameters:
+  # プロジェクト名を入力する。各リソースのNameタグの値となる。
+  EnvironmentName:
+    Description: single-az-ec2-template
+    Type: String
+
+  # VPCのCIDRレンジ
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  # パブリックサブネット1
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.1.0/24
+
+  # プライベートサブネット1
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.2.0/24
+
+  # EC2インスタンスタイプ
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.nano
+    Description: Select EC2 instance type.
+#----------------------------------------------------------------
+# リソース
+#----------------------------------------------------------------
+Resources:
+
+#----------------------
+# VPC作成
+#----------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      # 何の設定かわからないが、基本的にtrueにしても良さそう
+      EnableDnsSupport: true
+      EnableDnsHostnames: false
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+#----------------------
+# Publicサブネット1作成
+#----------------------
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      # サブネットで起動されたインスタンスが起動時にパブリック IP アドレスを設定するかどうか
+      # Publicサブネットなのでtrueにする
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ1)
+
+#----------------------
+# Privateサブネット1作成
+#----------------------
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      # Privateサブネットなのでtrueにする
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ1)
+
+#----------------------
+# IGW作成
+#----------------------
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+#----------------------
+# IGWをVPCにアタッチする
+#----------------------
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+#----------------------
+# ルートテーブル（Publicサブネット用）作成
+#----------------------
+  # ルートテーブル（Publicサブネット用）作成
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Routes
+
+  # 上記のルートテーブルに、下記レコードを追加
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    # リソースの作成順序は、IGWがVPCにアタッチされた後とする
+    DependsOn: InternetGatewayAttachment
+    # カラム
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      # すべてネットワーク
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Publicサブネット1に、上記ルートテーブルを紐付ける
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      # ルートテーブル（Publicサブネット用）
+      RouteTableId: !Ref PublicRouteTable
+      # Publicサブネット1
+      SubnetId: !Ref PublicSubnet1
+
+#----------------------
+# ルートテーブル（Privateサブネット用）作成
+#----------------------
+  # ルートテーブル（Privateサブネット用）を作成
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes
+
+  # Privateサブネット1に、上記ルートテーブルを紐付ける
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+#----------------------
+# セキュリティグループを作成する
+#----------------------
+  # PublicサブネットのEC2にアタッチするセキュリティグループを定義する
+  PublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup # 公開セキュリティグループのリソースを定義します。
+    Properties:
+      GroupDescription: Allow SSH or HTTP or HTTPS
+      VpcId: !Ref VPC
+      # セキュリティグループのインバウンドルールを設定
+      SecurityGroupIngress:
+        # SSH
+        # - IpProtocol: tcp #プロトコル
+        #  FromPort: 22 #開始ポート
+        #  ToPort: 22 #終了ポート
+        #  CidrIp: 0.0.0.0/0 # 許可する送信元CIDR IPアドレス範囲
+        # HTTP
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        # ポート3000を許可
+        #- IpProtocol: tcp
+        #  FromPort: 3000
+        #  ToPort: 3000
+        #  CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: public-sg
+
+  # PrivateサブネットのEC2にアタッチするセキュリティグループを定義する
+  PrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: private-sg
+      SecurityGroupIngress:
+        # SSH
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+
+#----------------------
+# PublicサブネットのEC2作成
+#----------------------
+  # 新しいキーペアを作成する。SSMに保存される
+  NewKeyPair:
+    Type: 'AWS::EC2::KeyPair'
+    Properties:
+      KeyName: KeyPair20230806
+
+  # Publicサブネットに配置するEC2を作成する
+  PublicSubnet1EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      # AMIはAmazonLinux2
+      ImageId: "ami-0e25eba2025eea319"
+      # インスタンスタイプは、t2.micro
+      InstanceType: !Ref InstanceType
+      # キーペア
+      KeyName: !Ref NewKeyPair
+      #SubnetId: !Ref PublicSubnet1
+      #SecurityGroupIds: !Ref PublicSecurityGroup
+      NetworkInterfaces:
+        - SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - !Ref PublicSecurityGroup
+          # パブリック IP の自動割り当て
+          AssociatePublicIpAddress: true
+          DeviceIndex : 0
+      # ストレージを設定
+      BlockDeviceMappings:
+        # この値はAMIによって異なる場合があるため、適切な値に変更する必要があるかもしれません
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeType: "gp2"
+            VolumeSize: 8
+      # SSM経由でSSH接続出来るようにするIAMロールをアタッチする
+      IamInstanceProfile:
+        Ref: SessionManagerIamInstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet EC2Instance
+
+  # PublicサブネットのEC2インスタンスをSSM経由でSSH接続出来るようにする
+  SsmSessionManagerIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      RoleName: 'SsmSessionManagerIamRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  SessionManagerIamInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref SsmSessionManagerIamRole
+
+  # EC2にEIPをつける
+  ElasticIpForPublicSubnet1EC2Instance:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref PublicSubnet1EC2Instance
+
+#----------------------
+# PublicサブネットのEC2作成
+#----------------------
+  # Privateサブネットに配置するEC2を作成する
+  PrivateSubnet1EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      # AMIはAmazonLinux2
+      ImageId: "ami-0e25eba2025eea319"
+      # インスタンスタイプは、t2.micro
+      InstanceType: !Ref InstanceType
+      # キーペア
+      KeyName: !Ref NewKeyPair
+      SubnetId: !Ref PrivateSubnet1
+      # ストレージを設定
+      BlockDeviceMappings:
+        # この値はAMIによって異なる場合があるため、適切な値に変更する必要があるかもしれません
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeType: "gp2"
+            VolumeSize: 8
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet EC2Instance
+      # セキュリティグループ
+      SecurityGroupIds:
+        - !Ref PrivateSecurityGroup

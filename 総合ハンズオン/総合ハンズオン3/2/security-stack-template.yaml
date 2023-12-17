@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'hands-on1'
+#----------------------------------------------------------------
+# パラメーター
+#----------------------------------------------------------------
+Parameters:
+  EnvironmentName:
+    Description: hands-on1-template
+    Type: String
+#----------------------------------------------------------------
+# リソース
+#----------------------------------------------------------------
+Resources:
+
+  #----------------------
+  # セキュリティグループ作成
+  #----------------------
+  # EC2用のセキュリティグループ
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: Web-SG-1
+      GroupDescription: "Description"
+      VpcId: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-VPCId'
+      #インバウンドルール
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LbSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LbSecurityGroup
+      #アウトバウンドルール
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: Web-sg1
+
+  #RDS用セキュリティグループ
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: RDS-SG-1
+      GroupDescription: "Description"
+      VpcId: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-VPCId'
+      SecurityGroupIngress:
+        # Replace with your specific IP range or remove the CidrIp property to allow access from anywhere
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebSecurityGroup
+      Tags:
+        - Key: Name
+          Value: RDS-SG-1
+
+  # ALB用のセキュリティグループ
+  LbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: LB-SG-1
+      GroupDescription: "Security Group for ALB"
+      VpcId: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-VPCId'
+      SecurityGroupIngress:
+        # HTTP
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: LB-SG-1
+
+#----------------------
+# エクスポート
+#----------------------
+Outputs:
+  WebSecurityGroup:
+    Value: !Ref WebSecurityGroup
+    Description: "Web Security Group ID"
+    Export:
+      Name: !Sub "${EnvironmentName}-WebSecurityGroupId"
+
+  RdsSecurityGroup:
+    Value: !Ref RdsSecurityGroup
+    Description: "Security Group ID for RDS access"
+    Export:
+      Name: !Sub "${EnvironmentName}-RdsSecurityGroupId"
+
+  # ALB用セキュリティグループのエクスポート
+  LbSecurityGroup:
+    Description: "Security Group ID for ALB"
+    Value: !Ref LbSecurityGroup
+    Export:
+      Name: !Sub "${EnvironmentName}-LbSecurityGroupId"
