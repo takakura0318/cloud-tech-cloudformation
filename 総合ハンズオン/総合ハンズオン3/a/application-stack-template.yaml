@@ -52,7 +52,10 @@ Resources:
       MultiAZ: false
 
   #----------------------
-  # SSMロール クロススタック参照ができない為、このファイルでリソースを作成する
+  # IAMロール クロススタック参照ができない為、ここでIAMロールを作成する
+  # ポリシー
+  # ・SSMログインの為のポリシー
+  # ・EC2のログをcloudwatchに送信する為のポリシー
   #----------------------
   SsmSessionManagerIamRole:
     Type: AWS::IAM::Role
@@ -70,6 +73,7 @@ Resources:
       RoleName: 'SsmSessionManagerIamRole'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
 
   SessionManagerIamInstanceProfile:
     Type: 'AWS::IAM::InstanceProfile'
@@ -110,12 +114,6 @@ Resources:
             #!/bin/bash
             # AWS CLIをインストール
             yum install -y aws-cli
-            # 現在のインスタンスIDを取得
-            # INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
-            # 利用可能なElastic IPを取得（ここでは例として固定のEIPを使用）
-            # ALLOCATION_ID="eipalloc-1234567890abcdef0"
-            # Elastic IPをインスタンスに割り当て
-            # aws ec2 associate-address --instance-id $INSTANCE_ID --allocation-id $ALLOCATION_ID
             # Amazon Linux 2 に PHP、MySQL、Apache、WordPress をインストール
             amazon-linux-extras install -y php7.4
             yum install -y mysql httpd php-mbstring php-xml gd php-gd
@@ -125,6 +123,25 @@ Resources:
             tar zxvf latest-ja.tar.gz
             cp -r wordpress/* /var/www/html/
             chown apache:apache -R /var/www/html/
+            #######################   cloudwatchでログ監視   ###########################
+            # awslogs のインストール
+            yum -y install awslogs
+            # awslogs の設定
+            sed -i 's/region = us-east-1/region = ap-northeast-1/' /etc/awslogs/awscli.conf
+            cat <<EOT >> /etc/awslogs/awslogs.conf
+            [HttpAccessLog]
+            file = /var/log/httpd/access_log
+            log_group_name = HttpAccessLog
+            log_stream_name = {instance_id}
+            datetime_format = %b %d %H:%M:%S
+            [HttpErrorLog]
+            file = /var/log/httpd/error_log
+            log_group_name = HttpErrorLog
+            log_stream_name = {instance_id}
+            datetime_format = %b %d %H:%M:%S
+            EOT
+            systemctl enable awslogsd
+            systemctl start awslogsd
 
   #----------------------
   # ALBターゲットグループ作成
@@ -234,8 +251,8 @@ Resources:
       MetricName: CPUUtilization
       # 統計
       Statistic: Average
-      # 集計期間:2 minutes
-      Period: 120
+      # 集計期間
+      Period: 300
       # 静的
       EvaluationPeriods: 1
       # 条件値
@@ -262,7 +279,7 @@ Resources:
       MetricName: CPUUtilization
       Namespace: AWS/EC2
       Statistic: Average
-      Period: 120
+      Period: 300
       EvaluationPeriods: 1
       Threshold: 30
       ComparisonOperator: LessThanThreshold
