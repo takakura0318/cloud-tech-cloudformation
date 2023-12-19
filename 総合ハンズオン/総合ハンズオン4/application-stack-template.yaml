@@ -1,0 +1,323 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'hands-on1'
+#----------------------------------------------------------------
+# パラメーター
+#----------------------------------------------------------------
+Parameters:
+  # EC2インスタンスタイプ
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.nano
+    Description: Select EC2 instance type.
+
+  EnvironmentName:
+    Description: hands-on1-template
+    Type: String
+
+#----------------------------------------------------------------
+# リソース
+#----------------------------------------------------------------
+Resources:
+  #----------------------
+  # RDS作成
+  #----------------------
+  MyRDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      # データベースエンジン
+      Engine: mysql
+      # マスターユーザー名
+      MasterUsername: wordpress
+      # ストレージの割り当て (GB)
+      AllocatedStorage: 20
+      # マスターパスワード（実際の環境ではセキュアな方法で提供する）
+      MasterUserPassword: "ChangeMe1234"
+      # DBインスタンスクラス
+      DBInstanceClass: db.t2.micro
+      # データベース名
+      DBName: wordpress
+      # VPCの設定（Outputsから参照）
+      DBSubnetGroupName: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-RdsSubnetGroupId'
+      # パブリックアクセス無効
+      PubliclyAccessible: false
+      # セキュリティグループ
+      VPCSecurityGroups:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-RdsSecurityGroupId'
+      # マルチAZ
+      MultiAZ: false
+
+  #----------------------
+  # IAMロール クロススタック参照ができない為、ここでIAMロールを作成する
+  # ポリシー
+  # ・SSMログインの為のポリシー
+  # ・EC2のログをcloudwatchに送信する為のポリシー
+  #----------------------
+  SsmSessionManagerIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      RoleName: 'SsmSessionManagerIamRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  SessionManagerIamInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref SsmSessionManagerIamRole
+  #----------------------
+  # 起動テンプレート作成(EC2インスタンスの設計書を作成)
+  #----------------------
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: MyLaunchTemplate
+      LaunchTemplateData:
+        # AmazonLinux2
+        ImageId: "ami-0e25eba2025eea319"
+        InstanceType: !Ref InstanceType
+        NetworkInterfaces:
+          # 自動割当パプリックIPを有効
+          - AssociatePublicIpAddress: true
+            DeviceIndex: 0
+            # セキュリティグループはこちらに指定
+            Groups:
+              - !ImportValue
+                'Fn::Sub': '${EnvironmentName}-WebSecurityGroupId'
+        # ストレージを設定
+        BlockDeviceMappings:
+          - DeviceName: "/dev/xvda"
+            Ebs:
+              VolumeType: "gp2"
+              VolumeSize: 8
+        # SSM経由でSSH接続出来るようにするIAMロールをアタッチする
+        IamInstanceProfile:
+          Arn: !GetAtt SessionManagerIamInstanceProfile.Arn
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # AWS CLIをインストール
+            yum install -y aws-cli
+            # Amazon Linux 2 に PHP、MySQL、Apache、WordPress をインストール
+            amazon-linux-extras install -y php7.4
+            yum install -y mysql httpd php-mbstring php-xml gd php-gd
+            systemctl enable httpd.service
+            systemctl start httpd.service
+            wget https://ja.wordpress.org/latest-ja.tar.gz
+            tar zxvf latest-ja.tar.gz
+            cp -r wordpress/* /var/www/html/
+            chown apache:apache -R /var/www/html/
+            #######################   cloudwatchでログ監視   ###########################
+            # awslogs のインストール
+            yum -y install awslogs
+            # awslogs の設定
+            sed -i 's/region = us-east-1/region = ap-northeast-1/' /etc/awslogs/awscli.conf
+            cat <<EOT >> /etc/awslogs/awslogs.conf
+            [HttpAccessLog]
+            file = /var/log/httpd/access_log
+            log_group_name = HttpAccessLog
+            log_stream_name = {instance_id}
+            datetime_format = %b %d %H:%M:%S
+            [HttpErrorLog]
+            file = /var/log/httpd/error_log
+            log_group_name = HttpErrorLog
+            log_stream_name = {instance_id}
+            datetime_format = %b %d %H:%M:%S
+            EOT
+            systemctl enable awslogsd
+            systemctl start awslogsd
+
+  #----------------------
+  # ALBターゲットグループ作成
+  #----------------------
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-VPCId'
+      HealthCheckPath: /readme.html
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: '80'
+      #ヘルスチェック間隔
+      HealthCheckIntervalSeconds: 10
+      #ヘルスチェックのタイムアウト時間
+      HealthCheckTimeoutSeconds: 5
+      #ヘルシーと見なすための連続成功回数
+      HealthyThresholdCount: 2
+      #アンヘルシーと見なすための連続失敗回数
+      UnhealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+
+
+  #----------------------
+  # ALBリスナー作成
+  #----------------------
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  #----------------------
+  # ALB作成
+  #----------------------
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: LB1
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet1Id'
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet2Id'
+      SecurityGroups:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-LbSecurityGroupId'
+
+  #----------------------
+  # AutoScalingGroup作成
+  #----------------------
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      #起動テンプレート
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      # AutoScalingグループにALBを紐付ける
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      # 任意な名前
+      AutoScalingGroupName: Test-AutoScaling1
+      # 希望する容量
+      DesiredCapacity: 2
+      # 最小キャパシティ
+      MinSize: 2
+      # 最大キャパシティ
+      MaxSize: 4
+      VPCZoneIdentifier:
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet1Id'
+        - !ImportValue
+          'Fn::Sub': '${EnvironmentName}-PublicSubnet2Id'
+      # ヘルスチェックタイプ ELBの場合はELB
+      HealthCheckType: ELB
+      # ヘルスチェック感覚
+      HealthCheckGracePeriod: 300
+
+  #----------------------
+  # SNSトピックの作成
+  #----------------------
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: dev.takakura0318@gmail.com
+          Protocol: email
+      TopicName: "NotificationTopic"
+
+  #----------------------
+  # CloudWatchアラーム（CPUが70%を超えた場合）
+  #----------------------
+  HighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm when CPU exceeds 70%"
+      # メトリクスの選択
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      # 統計
+      Statistic: Average
+      # 集計期間
+      Period: 300
+      # 静的
+      EvaluationPeriods: 1
+      # 条件値
+      Threshold: 70
+      # 演算子:より大きい
+      ComparisonOperator: GreaterThanThreshold
+      # よくわからないけどざっくり名前みたいもの
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref NotificationTopic
+        - !Ref HighCpuScalingPolicy
+      # 欠落データは見つかりませんで処理
+      TreatMissingData: missing
+
+  #----------------------
+  # CloudWatchアラーム（CPUが30%以下の場合）
+  #----------------------
+  LowCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm when CPU falls below 30%"
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref NotificationTopic
+        - !Ref LowCpuScalingPolicy
+      TreatMissingData: notBreaching
+
+  #----------------------
+  # AutoScalingグループのスケーリングポリシー（CPU使用率が高い場合）
+  #----------------------
+  HighCpuScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      # ポリシータイプ
+      PolicyType: SimpleScaling
+      # 1台追加
+      ScalingAdjustment: 1
+      AdjustmentType: ChangeInCapacity
+      # 別のスケーリングアクティビティを許可するまでの秒数
+      Cooldown: 30
+
+  #----------------------
+  # AutoScalingグループのスケーリングポリシー（CPU使用率が低い場合）
+  #----------------------
+  LowCpuScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
+      ScalingAdjustment: -1
+      AdjustmentType: ChangeInCapacity
+      Cooldown: 30
+
+#----------------------
+# Outputs
+#----------------------
