@@ -123,6 +123,15 @@ Resources:
             tar zxvf latest-ja.tar.gz
             cp -r wordpress/* /var/www/html/
             chown apache:apache -R /var/www/html/
+            # HTTPSを認識するための設定をwp-config.phpに追加
+            # wp-config-sample.phpをコピーしてwp-config.phpを作成
+            cp /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
+            # HTTPSを認識するための設定をwp-config.phpに追加
+            sed -i '/That'\''s all, stop editing! Happy publishing./i \
+            if (isset($_SERVER['\''HTTP_X_FORWARDED_PROTO'\'']) && $_SERVER['\''HTTP_X_FORWARDED_PROTO'\''] === '\''https'\'') {\
+              $_SERVER['\''HTTPS'\''] = '\''on'\'';\
+              $_ENV['\''HTTPS'\''] = '\''on'\'';\
+            }' /var/www/html/wp-config.php
             #######################   cloudwatchでログ監視   ###########################
             # awslogs のインストール
             yum -y install awslogs
@@ -170,15 +179,35 @@ Resources:
   #----------------------
   # ALBリスナー作成
   #----------------------
+  #HTTP
+  # 既存のHTTPリスナーをリダイレクト用に変更
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref ALBTargetGroup
       LoadBalancerArn: !Ref ApplicationLoadBalancer
       Port: 80
       Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  # HTTPSリスナーを追加
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !ImportValue
+            'Fn::Sub': '${EnvironmentName}-CertificateArn'
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
 
   #----------------------
   # ALB作成
@@ -382,6 +411,9 @@ Resources:
             DNSName: !Sub "http://${S3Bucket}.s3-website-${AWS::Region}.amazonaws.com"
             EvaluateTargetHealth: false
 
+  #----------------------
+  # Route53→ALBに対する対するヘルスチェック
+  #----------------------
   ALBHealthCheck:
     Type: AWS::Route53::HealthCheck
     Properties:

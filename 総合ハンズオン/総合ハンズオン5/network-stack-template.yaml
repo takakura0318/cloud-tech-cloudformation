@@ -195,6 +195,19 @@ Resources:
     Properties:
       Name: aws-dev-lab-demo.shop
 
+  #----------------------
+  # AWS Certificate Manager(証明書)作成
+  #----------------------
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: "blog.aws-dev-lab-demo.shop"
+      # 検証方法
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: "blog.aws-dev-lab-demo.shop"
+          HostedZoneId: !Ref HostedZone
+
 #----------------------
 # エクスポート
 #----------------------
@@ -228,3 +241,9 @@ Outputs:
     Value: !Ref HostedZone
     Export:
       Name: !Sub "${EnvironmentName}-HostedZoneId"
+
+  CertificateArn:
+    Description: "The ARN of the SSL Certificate"
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub "${EnvironmentName}-CertificateArn"

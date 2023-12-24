@@ -1,0 +1,40 @@
+#network-stack-template.yaml
+#application-stack-template.yaml
+
+上記に対して、下記を追加してして頂きたいです。なお、
+下記はAWSマネジメントコンソール上で追加した場合の手順となります。
+cloudformaitonテンプレートを書く際の参考としてください。
+
+また、AWS Certificate Manager作成は、network-stack-template.yamlファイルに追記し、
+それ以外は、application-stack-template.yamlに追加お願いします。
+AWS Certificate Manageはクロススタック参照できるようにエクスポートして定義してください
+
+AWS Certificate Manager
+    ドメイン名:blog.aws-dev-lab-demo.shop
+    検証方法の選択:DNSの検証
+    検証方法:Route53でのレコードの作成(CNAME)
+
+既存のALBリスナーに追加する
+    プロトコル:
+        HTTPS:443
+    デフォルトアクション
+        転送先:ALBTargetGroup
+    セキュリティポリシー:ELBSecurityPolicy-2016-08
+    デフォルトのSSL証明書:
+        ACMから:上記ACMで作成した証明書
+
+リスナールールでHTTPSにリダイレクトする場合:
+    HTTPでの接続を受け入れ、HTTPSへ自動的にリダイレクトします。
+
+手作業
+    CSS崩れの修正
+        SSHログイン
+        cd var/www/html
+        vi wp-config.php
+
+if($_SERVER['HTTP_X_FORWARDED_PROTO'] == 'https') {
+  $_SERVER['HTTPS'] = 'on';
+  $_ENV['HTTPS'] = 'on';
+}
+
+
