@@ -292,7 +292,8 @@ Resources:
       TreatMissingData: notBreaching
 
   #----------------------
-  # AutoScalingグループのスケーリングポリシー（CPU使用率が高い場合）
+  # AutoScalingグループのスケーリングポリシー
+  # CPU使用率が70%より大きい場合はEC2を1台追加する
   #----------------------
   HighCpuScalingPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
@@ -307,7 +308,8 @@ Resources:
       Cooldown: 30
 
   #----------------------
-  # AutoScalingグループのスケーリングポリシー（CPU使用率が低い場合）
+  # AutoScalingグループのスケーリングポリシー
+  # CPU使用率が30%以下の場合はEC2を1台削除する
   #----------------------
   LowCpuScalingPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
@@ -318,6 +320,82 @@ Resources:
       AdjustmentType: ChangeInCapacity
       Cooldown: 30
 
+  #----------------------
+  # S3バケットの作成
+  #----------------------
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Route53にて、ALBと連携したフェイルオーバールーティング機能を使う為、バケット名はドメイン名を指定する必要がある
+      BucketName: blog.aws-dev-lab-demo.shop
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        IgnorePublicAcls: false
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+
+  #バケットに権限付与
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'PublicReadGetObject'
+            Effect: 'Allow'
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${S3Bucket}/*'
+
+  #----------------------
+  # 作成したホストゾーンにレコードを追加する
+  #----------------------
+  # フェイルオーバーのためのRoute 53レコードセットグループ
+  MyRecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !ImportValue
+        'Fn::Sub': '${EnvironmentName}-HostedZoneId'
+      RecordSets:
+        # ALBに対するプライマリレコード
+        - Name: "blog.aws-dev-lab-demo.shop"
+          Type: A
+          SetIdentifier: "Primary-ALB"
+          Failover: "PRIMARY"
+          HealthCheckId: !Ref ALBHealthCheck
+          AliasTarget:
+            HostedZoneId: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt ApplicationLoadBalancer.DNSName
+            EvaluateTargetHealth: true
+        # S3に対するセカンダリレコード
+        - Name: "blog.aws-dev-lab-demo.shop"
+          Type: A
+          SetIdentifier: "Secondary-S3"
+          Failover: "SECONDARY"
+          AliasTarget:
+            HostedZoneId: "Z2M4EHUR26P7ZW"
+            # ここの値を仮にマネコンで設定する場合はプルダウン値にサジェストがある。そのサジェストにいずれかに合致する値を指定しないフェイルオーバされないので注意
+            DNSName: !Sub "http://${S3Bucket}.s3-website-${AWS::Region}.amazonaws.com"
+            EvaluateTargetHealth: false
+
+  ALBHealthCheck:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        # ALBのリッスンポート
+        Port: 80
+        Type: HTTP
+        # ALBのヘルスチェックパス
+        ResourcePath: "/readme.html"
+        FullyQualifiedDomainName: !GetAtt ApplicationLoadBalancer.DNSName
+        # ヘルスチェックのリクエスト間隔（秒）
+        RequestInterval: 30
+        # ヘルスチェックが失敗と判断されるまでの連続回数
+        FailureThreshold: 3
 #----------------------
 # Outputs
 #----------------------
