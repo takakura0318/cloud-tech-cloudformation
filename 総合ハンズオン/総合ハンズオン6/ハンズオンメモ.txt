@@ -1,0 +1,58 @@
+既存のホストゾーンのフェイルオーバーの為のレコード2つのドメイン名を変更する
+【変更前】
+ドメイン名:blog.aws-dev-lab-demo.shop
+【変更後】
+ドメイン名:alb.aws-dev-lab-demo.shop
+
+----------------------------------------------------------
+ALB用の証明書を取得 ※東京リージョンで作成する
+    ドメイン名:*.aws-dev-lab-demo.shop
+    検証方法の選択:DNSの検証
+    検証方法:Route53でのレコードの作成(CNAME)
+
+----------------------------------------------------------
+ALBリスナーに追加する
+    プロトコル:
+        HTTPS:443
+    デフォルトアクション
+        転送先:ALBTargetGroup
+    セキュリティポリシー:ELBSecurityPolicy-2016-08
+    デフォルトのSSL証明書:
+        ACMから:上記ACMで作成した証明書
+
+----------------------------------------------------------
+CloudFront用の証明書を取得する ※バージニアリージョン
+    ドメイン名:*.aws-dev-lab-demo.shop
+    検証方法の選択:DNSの検証
+    検証方法:Route53でのレコードの作成(CNAME)
+
+----------------------------------------------------------
+CloudFrontを作成する
+    delivery method:web
+    OriginDomainName:alb.aws-dev-lab-demo.shop
+    Origin Protocol Policy:HTTPS Only
+    Create a new policy:
+        Info:
+            Name:ShortCache
+
+        TTL Settings
+            Minimum TTL:60
+            Maximum TTL:60
+            Default TTL:60
+    Alternate Domain Names:blog.aws-dev-lab-demo.shop
+    SSL Certificate:
+        Custom SSL Certificate
+        *.aws-dev-lab-demo.shop
+----------------------------------------------------------
+ホストゾーンにレコードを作成
+    ルーティングポリシー:シンプルルーティング
+    シンプルなレコードを定義:
+        レコード名:blog.aws-dev-lab-demo.shop
+        値/トラフィックのルーティング先:CloudFrontディストリビューションへのエイリアス
+        リージョン:バージニア北部
+        ディストリビューションを選択:上記で作成したCloudFrontのドメイン名
+
+
+
+
+
