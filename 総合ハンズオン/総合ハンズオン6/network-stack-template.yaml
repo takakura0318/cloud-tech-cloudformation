@@ -198,14 +198,14 @@ Resources:
   #----------------------
   # AWS Certificate Manager(証明書)作成
   #----------------------
-  Certificate:
+  # ALBで使用する
+  AlbCertificate:
     Type: AWS::CertificateManager::Certificate
     Properties:
-      DomainName: "blog.aws-dev-lab-demo.shop"
-      # 検証方法
+      DomainName: "*.aws-dev-lab-demo.shop"
       ValidationMethod: DNS
       DomainValidationOptions:
-        - DomainName: "blog.aws-dev-lab-demo.shop"
+        - DomainName: "*.aws-dev-lab-demo.shop"
           HostedZoneId: !Ref HostedZone
 
 #----------------------
@@ -242,8 +242,9 @@ Outputs:
     Export:
       Name: !Sub "${EnvironmentName}-HostedZoneId"
 
-  CertificateArn:
-    Description: "The ARN of the SSL Certificate"
-    Value: !Ref Certificate
+  # ALB Certificate ARN
+  AlbCertificateArn:
+    Description: "The ARN of the ALB SSL Certificate"
+    Value: !Ref AlbCertificate
     Export:
-      Name: !Sub "${EnvironmentName}-CertificateArn"
+      Name: !Sub "${EnvironmentName}-AlbCertificateArn"

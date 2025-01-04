@@ -203,7 +203,7 @@ Resources:
       Protocol: HTTPS
       Certificates:
         - CertificateArn: !ImportValue
-            'Fn::Sub': '${EnvironmentName}-CertificateArn'
+            'Fn::Sub': '${EnvironmentName}-AlbCertificateArn'
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
@@ -390,8 +390,14 @@ Resources:
       HostedZoneId: !ImportValue
         'Fn::Sub': '${EnvironmentName}-HostedZoneId'
       RecordSets:
-        # ALBに対するプライマリレコード
+        # CloudFrontディストリビューションへのレコード
         - Name: "blog.aws-dev-lab-demo.shop"
+          Type: A
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2 # CloudFrontのホストゾーンID
+            DNSName: !GetAtt MyCloudFrontDistribution.DomainName
+        # ALBに対するプライマリレコード
+        - Name: "alb.aws-dev-lab-demo.shop"
           Type: A
           SetIdentifier: "Primary-ALB"
           Failover: "PRIMARY"
@@ -401,7 +407,7 @@ Resources:
             DNSName: !GetAtt ApplicationLoadBalancer.DNSName
             EvaluateTargetHealth: true
         # S3に対するセカンダリレコード
-        - Name: "blog.aws-dev-lab-demo.shop"
+        - Name: "alb.aws-dev-lab-demo.shop"
           Type: A
           SetIdentifier: "Secondary-S3"
           Failover: "SECONDARY"
@@ -428,6 +434,62 @@ Resources:
         RequestInterval: 30
         # ヘルスチェックが失敗と判断されるまでの連続回数
         FailureThreshold: 3
+
+  #----------------------
+  # CloudFrontディストリビューション
+  #----------------------
+  # CloudFront作成
+  MyCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases:
+          - blog.aws-dev-lab-demo.shop
+        Origins:
+          - Id: MyALBOrigin
+            DomainName: alb.aws-dev-lab-demo.shop
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: MyALBOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          CachePolicyId: !Ref ShortCachePolicy # キャッシュポリシーを適用
+        ViewerCertificate:
+          AcmCertificateArn: !ImportValue
+            'Fn::Sub': '${EnvironmentName}-CloudFrontCertificateArn'
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2018
+
+  # CloudFrontキャッシュポリシー
+  ShortCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: ShortCache
+        DefaultTTL: 60
+        MaxTTL: 60
+        MinTTL: 60
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: none
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
 #----------------------
 # Outputs
 #----------------------

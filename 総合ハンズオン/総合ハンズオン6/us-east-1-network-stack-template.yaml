@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFront SSL Certificate Creation in us-east-1'
+
+Parameters:
+  # AWSのまネコンから、東京リージョン>Route53>一覧からホストゾーンIDを確認する
+  HostedZoneId:
+    Type: String
+    Description: The ID of the Route 53 Hosted Zone used for DNS validation of the SSL certificate.
+
+Resources:
+  # CloudFront用の証明書を作成
+  CloudFrontCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: "*.aws-dev-lab-demo.shop"
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: "*.aws-dev-lab-demo.shop"
+          # このIDは、Route 53ホストゾーンIDを指定する
+          HostedZoneId: "Route53HostedZoneID"
+
+Outputs:
+  # CloudFront証明書のARNをエクスポート
+  CloudFrontCertificateArn:
+    Description: "The ARN of the CloudFront SSL Certificate"
+    Value: !Ref CloudFrontCertificate
+    Export:
+      Name: "CloudFront-CertificateArn"
